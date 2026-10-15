@@ -155,35 +155,3 @@ class TestMeasureModel:
         assert "not found" in result["error"]
 
 
-class TestAnalyzePrintability:
-    def test_valid_model_returns_verdict(self, registered):
-        mcp, models, _ = registered
-        shape = models["test_box"]["shape"]
-        shape.solids = MagicMock(return_value=[MagicMock()])
-        shape.area = 2200.0
-        result = json.loads(mcp.tools["analyze_printability"]("test_box"))
-        assert "verdict" in result
-        assert result["verdict"] in ("PRINTABLE", "REVIEW NEEDED")
-        assert "checks" in result
-
-    def test_missing_model_returns_error(self, registered):
-        mcp, _, _ = registered
-        result = json.loads(mcp.tools["analyze_printability"]("ghost"))
-        assert result["success"] is False
-        assert "not found" in result["error"]
-
-    def test_oversized_model_flags_issue(self, mcp, tmp_output_dir):
-        from tests.conftest import FakeShape
-
-        models = {
-            "bigbox": {
-                "shape": FakeShape(bbox_max=(400, 400, 400), volume=64000000.0),
-                "code": "result = Box(400,400,400)",
-                "bbox": {"min": [0, 0, 0], "max": [400, 400, 400], "size": [400, 400, 400]},
-                "volume": 64000000.0,
-            }
-        }
-        register(mcp, models, tmp_output_dir)
-        result = json.loads(mcp.tools["analyze_printability"]("bigbox"))
-        assert result["verdict"] == "REVIEW NEEDED"
-        assert any("300mm" in issue for issue in result["issues"])

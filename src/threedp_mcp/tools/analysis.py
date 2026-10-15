@@ -12,6 +12,102 @@ from threedp_mcp.helpers import compute_overhangs, shape_to_model_entry
 def register(mcp, models: dict, output_dir: str):
     """Register analysis tools with MCP server."""
 
+    PRINTER_PROFILES = {
+        "x1c": {"name": "Bambu Lab X1C", "volume": (256, 256, 256), "max_overhang": 45, "min_wall": 0.8},
+        "p1s": {"name": "Bambu Lab P1S", "volume": (256, 256, 256), "max_overhang": 45, "min_wall": 0.8},
+        "p1p": {"name": "Bambu Lab P1P", "volume": (256, 256, 256), "max_overhang": 45, "min_wall": 0.8},
+        "a1": {"name": "Bambu Lab A1", "volume": (256, 256, 256), "max_overhang": 45, "min_wall": 0.8},
+        "a1_mini": {"name": "Bambu Lab A1 Mini", "volume": (180, 180, 180), "max_overhang": 45, "min_wall": 0.8},
+        "x1e": {"name": "Bambu Lab X1E", "volume": (256, 256, 256), "max_overhang": 45, "min_wall": 0.8},
+        "x2d": {"name": "Bambu Lab X2D", "volume": (256, 256, 256), "max_overhang": 45, "min_wall": 0.8},
+        "generic": {"name": "Generic FDM", "volume": (200, 200, 200), "max_overhang": 45, "min_wall": 1.2},
+    }
+
+    @mcp.tool()
+    def analyze_printability(name: str, printer_profile: str = "generic", custom_profile: str = None) -> str:
+        """Check if a model is suitable for FDM 3D printing against a specific printer profile.
+
+        Args:
+            name: Name of a previously created model
+            printer_profile: Printer profile name (e.g. x1c, p1s, a1_mini, generic). Defaults to generic.
+            custom_profile: Optional JSON string overriding profile settings e.g. '{"volume": [300,300,300], "min_wall": 0.8}'
+        """
+        if name not in models:
+            return json.dumps(
+                {"success": False, "error": f"Model '{name}' not found. Available: {list(models.keys())}"}
+            )
+
+        profile = PRINTER_PROFILES.get(printer_profile.lower(), PRINTER_PROFILES["generic"]).copy()
+        if custom_profile:
+            try:
+                custom = json.loads(custom_profile) if isinstance(custom_profile, str) else custom_profile
+                profile.update(custom)
+            except Exception as e:
+                return json.dumps({"success": False, "error": f"Invalid custom_profile JSON: {e}"})
+
+        shape = models[name]["shape"]
+        issues = []
+        checks = {}
+
+        try:
+            vol = shape.volume
+            checks["volume_mm3"] = round(vol, 3)
+            if vol <= 0:
+                issues.append("Model has zero or negative volume")
+        except Exception as e:
+            issues.append(f"Cannot compute volume: {e}")
+
+        try:
+            solids = shape.solids()
+            checks["solid_count"] = len(solids)
+            if len(solids) == 0:
+                issues.append("No solids found — not printable")
+        except Exception:
+            pass
+
+        bb = models[name]["bbox"]
+        dims = bb["size"]
+        checks["dimensions_mm"] = dims
+        if any(d < 1.0 for d in dims):
+            issues.append(f"Very small dimension ({min(dims):.1f}mm)")
+
+        vol_bounds = profile["volume"]
+        if dims[0] > vol_bounds[0] or dims[1] > vol_bounds[1] or dims[2] > vol_bounds[2]:
+            issues.append(
+                f"Exceeds build volume {vol_bounds} (model size: {round(dims[0],1)}x{round(dims[1],1)}x{round(dims[2],1)}) — may not fit bed"
+            )
+
+        try:
+            faces = shape.faces()
+            checks["face_count"] = len(faces)
+            if len(faces) < 4:
+                issues.append("Too few faces for a valid solid")
+        except Exception:
+            pass
+
+        try:
+            area = shape.area
+            vol = shape.volume
+            if vol > 0:
+                ratio = area / vol
+                checks["area_volume_ratio"] = round(ratio, 4)
+                if ratio > 7.5:
+                    issues.append(
+                        f"High area/volume ratio ({ratio:.2f}) — possible thin walls < {profile['min_wall']}mm"
+                    )
+        except Exception:
+            pass
+
+        return json.dumps(
+            {
+                "verdict": "PRINTABLE" if not issues else "REVIEW NEEDED",
+                "issues": issues,
+                "checks": checks,
+                "printer": f"{profile.get('name', 'Custom')} ({vol_bounds[0]}x{vol_bounds[1]}x{vol_bounds[2]}mm)",
+            },
+            indent=2,
+        )
+
     @mcp.tool()
     def estimate_print(
         name: str, infill_percent: float = 15.0, layer_height: float = 0.2, material: str = "PLA"

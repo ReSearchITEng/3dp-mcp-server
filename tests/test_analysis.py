@@ -96,3 +96,53 @@ class TestSplitModelByColor:
         result = json.loads(mcp._tools["split_model_by_color"]("output", "nonexistent", assignments))
         assert result["success"] is False
         assert "not found" in result["error"]
+
+class TestAnalyzePrintability:
+    @pytest.fixture
+    def registered(self, tmp_output_dir):
+        mcp = FakeMCP()
+        from tests.conftest import FakeShape
+        from unittest.mock import MagicMock
+        models = {
+            "test_box": {
+                "shape": FakeShape(bbox_max=(10, 20, 30), volume=6000.0),
+                "code": "result = Box(10,20,30)",
+                "bbox": {"min": [0, 0, 0], "max": [10, 20, 30], "size": [10, 20, 30]},
+                "volume": 6000.0,
+            }
+        }
+        models["test_box"]["shape"].solids = MagicMock(return_value=[MagicMock()])
+        models["test_box"]["shape"].area = 2200.0
+        register(mcp, models, tmp_output_dir)
+        return mcp, models, tmp_output_dir
+
+    def test_valid_model_returns_verdict(self, registered):
+        mcp, models, _ = registered
+        result = json.loads(mcp._tools["analyze_printability"]("test_box"))
+        assert "verdict" in result
+        assert result["verdict"] in ("PRINTABLE", "REVIEW NEEDED")
+        assert "checks" in result
+        assert "Bambu Lab" in result.get("printer", "") or "Generic" in result.get("printer", "")
+
+    def test_missing_model_returns_error(self, registered):
+        mcp, _, _ = registered
+        result = json.loads(mcp._tools["analyze_printability"]("ghost"))
+        assert result["success"] is False
+        assert "not found" in result["error"]
+
+    def test_oversized_model_flags_issue(self, tmp_output_dir):
+        from tests.conftest import FakeShape
+        mcp = FakeMCP()
+
+        models = {
+            "bigbox": {
+                "shape": FakeShape(bbox_max=(400, 400, 400), volume=64000000.0),
+                "code": "result = Box(400,400,400)",
+                "bbox": {"min": [0, 0, 0], "max": [400, 400, 400], "size": [400, 400, 400]},
+                "volume": 64000000.0,
+            }
+        }
+        register(mcp, models, tmp_output_dir)
+        result = json.loads(mcp._tools["analyze_printability"]("bigbox"))
+        assert result["verdict"] == "REVIEW NEEDED"
+        assert any("Exceeds build volume" in issue for issue in result["issues"])
