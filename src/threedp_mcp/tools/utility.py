@@ -64,6 +64,68 @@ def register(mcp, models: dict, output_dir: str):
             return json.dumps({"success": False, "error": str(e), "traceback": traceback.format_exc()}, indent=2)
 
     @mcp.tool()
+    def render_model_preview(name: str) -> str:
+        """Generate orthographic and isometric PNG previews for a model.
+
+        Args:
+            name: Name of a previously created model
+        """
+        if name not in models:
+            return json.dumps(
+                {"success": False, "error": f"Model '{name}' not found. Available: {list(models.keys())}"}
+            )
+
+        try:
+            from build123d import ExportSVG, Vector
+            import cairosvg
+            import tempfile
+
+            shape = models[name]["shape"]
+            model_dir = os.path.join(output_dir, name)
+            os.makedirs(model_dir, exist_ok=True)
+
+            views = {
+                "ortho": Vector(0, -1, 0),
+                "iso": Vector(1, -1, 1),
+            }
+
+            rendered_paths = []
+
+            for view_name, direction in views.items():
+                exporter = ExportSVG(scale=1.0)
+                # For build123d 0.13.0+ and others, add_shape does not have line_type=ExportSVG.LineType.VISIBLE
+                try:
+                    exporter.add_shape(shape)
+                except TypeError:
+                    exporter.add_shape(shape, layer="layer")
+
+                with tempfile.NamedTemporaryFile(suffix=".svg", delete=False) as tmp_svg:
+                    exporter.write(tmp_svg.name)
+
+                    png_name = f"{name}_{view_name}.png"
+                    png_path = os.path.join(model_dir, png_name)
+
+                    cairosvg.svg2png(url=tmp_svg.name, write_to=png_path)
+                    rendered_paths.append(png_path)
+
+                os.unlink(tmp_svg.name)
+
+            if "renders" not in models[name]:
+                models[name]["renders"] = []
+            models[name]["renders"].extend(rendered_paths)
+
+            return json.dumps(
+                {
+                    "success": True,
+                    "name": name,
+                    "renders": rendered_paths,
+                },
+                indent=2,
+            )
+        except Exception as e:
+            return json.dumps({"success": False, "error": str(e), "traceback": traceback.format_exc()}, indent=2)
+
+    @mcp.tool()
     def pack_models(name: str, model_names: str, padding: float = 5.0) -> str:
         """Arrange multiple models compactly on the build plate for batch printing.
 

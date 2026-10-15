@@ -64,11 +64,11 @@ def register(mcp, models: dict, output_dir: str):
 
     @mcp.tool()
     def export_model(name: str, format: str = "stl") -> str:
-        """Export a model to STL, STEP, or 3MF format.
+        """Export a model to STL, STEP, 3MF, or GLB format.
 
         Args:
             name: Name of a previously created model
-            format: Export format - "stl", "step", or "3mf"
+            format: Export format - "stl", "step", "3mf", or "glb"
         """
         if name not in models:
             return json.dumps(
@@ -92,11 +92,33 @@ def register(mcp, models: dict, output_dir: str):
 
                 export_step(model["shape"], out_path)
             elif fmt == "3mf":
-                from build123d import Mesher
+                try:
+                    from build123d import Mesher
 
-                with Mesher() as mesher:
-                    mesher.add_shape(model["shape"])
-                    mesher.write(out_path)
+                    with Mesher() as mesher:
+                        mesher.add_shape(model["shape"])
+                        mesher.write(out_path)
+                except Exception as e:
+                    # Fallback to trimesh for 3MF export
+                    import tempfile
+                    import trimesh
+                    from build123d import export_stl
+
+                    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as tmp_stl:
+                        export_stl(model["shape"], tmp_stl.name)
+                        mesh = trimesh.load(tmp_stl.name)
+                        mesh.export(out_path)
+                    os.unlink(tmp_stl.name)
+            elif fmt == "glb":
+                import tempfile
+                import trimesh
+                from build123d import export_stl
+
+                with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as tmp_stl:
+                    export_stl(model["shape"], tmp_stl.name)
+                    mesh = trimesh.load(tmp_stl.name)
+                    mesh.export(out_path)
+                os.unlink(tmp_stl.name)
             else:
                 return json.dumps({"success": False, "error": f"Unsupported format: {fmt}"})
 
@@ -142,76 +164,6 @@ def register(mcp, models: dict, output_dir: str):
             measurements["edges"] = None
 
         return json.dumps(measurements, indent=2)
-
-    @mcp.tool()
-    def analyze_printability(name: str, min_wall_mm: float = 0.8) -> str:
-        """Check if a model is suitable for FDM 3D printing (e.g. Bambu Lab X1C).
-
-        Args:
-            name: Name of a previously created model
-            min_wall_mm: Minimum wall thickness in mm (default 0.8)
-        """
-        if name not in models:
-            return json.dumps(
-                {"success": False, "error": f"Model '{name}' not found. Available: {list(models.keys())}"}
-            )
-
-        shape = models[name]["shape"]
-        issues = []
-        checks = {}
-
-        try:
-            vol = shape.volume
-            checks["volume_mm3"] = round(vol, 3)
-            if vol <= 0:
-                issues.append("Model has zero or negative volume")
-        except Exception as e:
-            issues.append(f"Cannot compute volume: {e}")
-
-        try:
-            solids = shape.solids()
-            checks["solid_count"] = len(solids)
-            if len(solids) == 0:
-                issues.append("No solids found — not printable")
-        except Exception:
-            pass
-
-        bb = models[name]["bbox"]
-        dims = bb["size"]
-        checks["dimensions_mm"] = dims
-        if any(d < 1.0 for d in dims):
-            issues.append(f"Very small dimension ({min(dims):.1f}mm)")
-        if any(d > 300 for d in dims):
-            issues.append(f"Exceeds 300mm ({max(dims):.1f}mm) — may not fit bed")
-
-        try:
-            faces = shape.faces()
-            checks["face_count"] = len(faces)
-            if len(faces) < 4:
-                issues.append("Too few faces for a valid solid")
-        except Exception:
-            pass
-
-        try:
-            area = shape.area
-            vol = shape.volume
-            if vol > 0:
-                ratio = area / vol
-                checks["area_volume_ratio"] = round(ratio, 4)
-                if ratio > 7.5:
-                    issues.append(f"High area/volume ratio ({ratio:.2f}) — possible thin walls < {min_wall_mm}mm")
-        except Exception:
-            pass
-
-        return json.dumps(
-            {
-                "verdict": "PRINTABLE" if not issues else "REVIEW NEEDED",
-                "issues": issues,
-                "checks": checks,
-                "printer": "Bambu Lab X1C (256x256x256mm)",
-            },
-            indent=2,
-        )
 
     @mcp.tool()
     def list_models() -> str:

@@ -9,11 +9,11 @@ import pytest
 @pytest.fixture
 def server_tools(tmp_path):
     """Set up a fresh server instance with real build123d."""
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
     from threedp_mcp.tools import register_all_tools
 
-    mcp = FastMCP("test-server")
+    mcp = MCPServer("test-server")
     models = {}
     output_dir = str(tmp_path / "outputs")
     os.makedirs(output_dir, exist_ok=True)
